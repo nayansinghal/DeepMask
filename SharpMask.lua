@@ -179,8 +179,8 @@ function SharpMask:createTopDownRefinement(config)
 
   self:createHorizontal2(config)
 
-  self.trunk2 = self.trunk:clone('weight','bias');
-  self.refs2 = self.refs:clone('weight', 'bias');
+  self.trunk2 = self.trunk:clone();
+  self.refs2 = self.refs:clone();
 
   return refs
 end
@@ -213,29 +213,31 @@ function SharpMask:forward(input)
     currentOutput = self.trunk2.modules[k]:forward(currentOutput)
   end
 
-  local neth2Inp ={}
+  local netv2Inp ={}
 
   F = self.neth2s[4]:forward(self.refs[4].output)
   torch.add(currentOutput, currentOutput, F)
-  table.insert(neth2Inp, currentOutput)
+  table.insert(netv2Inp, currentOutput)
   currentOutput = self.trunk2.modules[4]:forward(currentOutput)
   currentOutput = self.trunk2.modules[5]:forward(currentOutput)
 
   F = self.neth2s[3]:forward(self.refs[3].output)
   torch.add(currentOutput, currentOutput, F)
-  table.insert(neth2Inp, currentOutput)
+  table.insert(netv2Inp, currentOutput)
   currentOutput = self.trunk2.modules[6]:forward(currentOutput)
 
   F = self.neth2s[2]:forward(self.refs[2].output)
   torch.add(currentOutput, currentOutput, F)
-  table.insert(neth2Inp, currentOutput)
+  table.insert(netv2Inp, currentOutput)
   currentOutput = self.trunk2.modules[7]:forward(currentOutput)
   currentOutput = self.trunk2.modules[8]:forward(currentOutput)
 
   F = self.refs[1].output
   F = self.neth2s[1]:forward(F)
   torch.add(currentOutput, currentOutput, F)
-  table.insert(neth2Inp, currentOutput)
+  table.insert(netv2Inp, currentOutput)
+
+  self.netv2Inp = netv2Inp
 
   currentOutput = self.refs2[0]:forward(currentOutput)
   for k = 1,#self.refs2 do
@@ -251,12 +253,34 @@ end
 --------------------------------------------------------------------------------
 -- function: backward
 function SharpMask:backward(input,gradOutput)
+
+  -- backward pass for refinement 2
   local currentGrad = gradOutput
   for i = #self.refs,1,-1 do
-    currentGrad =self.refs[i]:backward(self.inps[i],currentGrad)
+    currentGrad =self.refs2[i]:backward(self.inps2[i],currentGrad)
     currentGrad = currentGrad[2]
   end
-  currentGrad =self.refs[0]:backward(self.trunk.output,currentGrad)
+  currentGrad =self.refs2[0]:backward(self.netv2Inp[4],currentGrad)
+
+  -- backward pass for trunk 2 and horizontal 2
+  self.neth2s[1]:backward(self.inps[1], currentGrad)
+  currentGrad = self.trunk2.modules[8]:backward(self.trunk2.modules[7].output, currentGrad)
+  currentGrad = currentGrad[2]
+
+  currentGrad = self.trunk2.modules[7]:backward(self.netv2Inp[3], currentGrad)
+  currentGrad = currentGrad[2]
+
+  self.neth2s[2]:backward(self.inps[2], currentGrad)
+  currentGrad = self.trunk2.modules[6]:backward(self.netv2Inp[2], currentGrad)
+  
+  self.neth2s[3]:backward(self.inps[3], currentGrad)
+  currentGrad = self.trunk2.modules[5]:backward(self.trunk2.modules[4].output, currentGrad)
+  currentGrad = self.trunk2.modules[4]:backward(self.netv2Inp[1], currentGrad)
+
+  self.neth2s[4]:backward(self.inps[4], currentGrad)
+  currentGrad = self.trunk2.modules[3]:backward(self.trunk2.modules[2].output, currentGrad)
+  currentGrad = self.trunk2.modules[2]:backward(self.trunk2.modules[1].output, currentGrad)
+  currentGrad = self.trunk2.modules[1]:backward(input, currentGrad)
 
   self.gradInput = currentGrad
   return currentGrad
