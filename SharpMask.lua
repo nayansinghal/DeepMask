@@ -232,8 +232,7 @@ function SharpMask:forward(input)
   currentOutput = self.trunk2.modules[7]:forward(currentOutput)
   currentOutput = self.trunk2.modules[8]:forward(currentOutput)
 
-  F = self.refs[1].output
-  F = self.neth2s[1]:forward(F)
+  F = self.neth2s[1]:forward(self.refs[1].output)
   torch.add(currentOutput, currentOutput, F)
   table.insert(netv2Inp, currentOutput)
 
@@ -241,8 +240,7 @@ function SharpMask:forward(input)
 
   currentOutput = self.refs2[0]:forward(currentOutput)
   for k = 1,#self.refs2 do
-    local F = neth2Inp[5-k]
-    self.inps2[k] = {F,currentOutput}
+    self.inps2[k] = {netv2Inp[5-k],currentOutput}
     currentOutput = self.refs2[k]:forward(self.inps[k])
   end
 
@@ -265,10 +263,7 @@ function SharpMask:backward(input,gradOutput)
   -- backward pass for trunk 2 and horizontal 2
   self.neth2s[1]:backward(self.inps[1], currentGrad)
   currentGrad = self.trunk2.modules[8]:backward(self.trunk2.modules[7].output, currentGrad)
-  currentGrad = currentGrad[2]
-
   currentGrad = self.trunk2.modules[7]:backward(self.netv2Inp[3], currentGrad)
-  currentGrad = currentGrad[2]
 
   self.neth2s[2]:backward(self.inps[2], currentGrad)
   currentGrad = self.trunk2.modules[6]:backward(self.netv2Inp[2], currentGrad)
