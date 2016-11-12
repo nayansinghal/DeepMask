@@ -24,6 +24,7 @@ local SharpMask, _ = torch.class('nn.SharpMask','nn.Container')
 --------------------------------------------------------------------------------
 -- function: init
 function SharpMask:__init(config)
+  print('| Init SharpMask')
   self.km, self.ks = config.km, config.ks
   assert(self.km >= 16 and self.km%16==0 and self.ks >= 16 and self.ks%16==0)
 
@@ -33,6 +34,7 @@ function SharpMask:__init(config)
 
   -- create bottom-up flow (from deepmask)
   local m = torch.load(config.dm..'/model.t7')
+
   local deepmask = m.model
   self.trunk = deepmask.trunk
   self.scoreBranch = deepmask.scoreBranch
@@ -54,6 +56,7 @@ function SharpMask:__init(config)
   print(string.format('| number of paramaters net v: %d', nv))
   print(string.format('| number of paramaters total: %d', nh+nv))
   self:cuda()
+
 end
 
 --------------------------------------------------------------------------------
@@ -123,13 +126,21 @@ end
 function SharpMask:createHorizontal2(config)
   local neth2s = {}
 
+  local crop;
   for i = 1, #self.skpos do
     local nInps = self.km/2^(i-1)
 
     output = 1024/2^(i-1)
+    if i == 1 then crop=0
+    elseif i == 2 then crop = 2
+    elseif i == 3 then crop = 4
+    elseif i == 4 then crop = 8
+    end
+
     if i==4 then output = 64 end
     local neth2 = nn.Sequential()
     
+    if crop ~= 0 then neth2:add(nn.SpatialZeroPadding(crop,crop,crop,crop)) end
     neth2:add(nn.SpatialSymmetricPadding(1,1,1,1))
     neth2:add(cudnn.SpatialConvolution(nInps,64,3,3,1,1))
     neth2:add(cudnn.ReLU())
@@ -179,14 +190,24 @@ function SharpMask:createTopDownRefinement(config)
 
   self:createHorizontal2(config)
 
-  self.trunk2 = self.trunk:clone();
-  self.refs2 = self.refs:clone();
+  self.trunk2 ={}
+  for i =1, #self.trunk.modules do
+    table.insert(self.trunk2,self.trunk.modules[i]:clone())
+  end
+
+  self.refs2 = {}
+  for i= 0, #self.refs do
+    table.insert(self.refs2, self.refs[i]:clone():cuda())
+  end
 
   return refs
 end
 
-function SharpMask:forwardMod1(input)
-
+--------------------------------------------------------------------------------
+-- function: forward
+function SharpMask:forward(input)
+  -- forward bottom-up 1 pass
+  
   local currentOutput = self.trunk:forward(input)
 
   -- forward refinement modules
@@ -196,52 +217,55 @@ function SharpMask:forwardMod1(input)
     self.inps[k] = {F,currentOutput}
     currentOutput = self.refs[k]:forward(self.inps[k])
   end
-  self.output = currentOutput
-  return self.output
-end
-
-
---------------------------------------------------------------------------------
--- function: forward
-function SharpMask:forward(input)
-  -- forward bottom-up 1 pass
-  forwardMod1(input)
 
   ---- trunk module forward second pass ---- 
   currentOutput = input
-  for k = 1, #3 do
-    currentOutput = self.trunk2.modules[k]:forward(currentOutput)
+  for k = 1, 3 do
+    currentOutput = self.trunk2[k]:forward(currentOutput)
   end
 
   local netv2Inp ={}
 
-  F = self.neth2s[4]:forward(self.refs[4].output)
+  F = self.neth2s[4]:forward(self.refs[3].output)
+  
   torch.add(currentOutput, currentOutput, F)
   table.insert(netv2Inp, currentOutput)
-  currentOutput = self.trunk2.modules[4]:forward(currentOutput)
-  currentOutput = self.trunk2.modules[5]:forward(currentOutput)
+  
+  currentOutput = self.trunk2[4]:forward(currentOutput)
+  currentOutput = self.trunk2[5]:forward(currentOutput)
 
-  F = self.neth2s[3]:forward(self.refs[3].output)
+  F = self.neth2s[3]:forward(self.refs[2].output)
   torch.add(currentOutput, currentOutput, F)
   table.insert(netv2Inp, currentOutput)
-  currentOutput = self.trunk2.modules[6]:forward(currentOutput)
+  currentOutput = self.trunk2[6]:forward(currentOutput)
 
-  F = self.neth2s[2]:forward(self.refs[2].output)
+  F = self.neth2s[2]:forward(self.refs[1].output)
   torch.add(currentOutput, currentOutput, F)
   table.insert(netv2Inp, currentOutput)
-  currentOutput = self.trunk2.modules[7]:forward(currentOutput)
-  currentOutput = self.trunk2.modules[8]:forward(currentOutput)
+  currentOutput = self.trunk2[7]:forward(currentOutput)
+  currentOutput = self.trunk2[8]:forward(currentOutput)
 
-  F = self.neth2s[1]:forward(self.refs[1].output)
+  F = self.neth2s[1]:forward(self.refs[0].output)
   torch.add(currentOutput, currentOutput, F)
   table.insert(netv2Inp, currentOutput)
-
+  for i =9,#self.trunk2 do
+    currentOutput = self.trunk2[i]:forward(currentOutput)
+  end
+  
+  table.insert(netv2Inp, currentOutput)
+  
   self.netv2Inp = netv2Inp
 
-  currentOutput = self.refs2[0]:forward(currentOutput)
-  for k = 1,#self.refs2 do
-    self.inps2[k] = {netv2Inp[5-k],currentOutput}
-    currentOutput = self.refs2[k]:forward(self.inps[k])
+  currentOutput = self.refs2[1]:forward(currentOutput)
+
+  for i = 1,#self.netv2Inp do
+    print(i)
+    print(self.netv2Inp[i]:size())
+  end
+
+  for k = 2,#self.refs2 do
+    self.inps2[k] = {netv2Inp[6-k],currentOutput}
+    currentOutput = self.refs2[k]:forward(self.inps2[k])
   end
 
   self.output = currentOutput
