@@ -266,7 +266,7 @@ function SharpMask:forward(input)
   end
 
   self.output = currentOutput
-  print('success')
+  --print('success')
   return self.output
 end
 
@@ -276,7 +276,7 @@ function SharpMask:backward(input,gradOutput)
 
   -- backward pass for refinement 2
 
-  print('1 phase start')
+  --print('1 phase start')
   local currentGrad = gradOutput
   for i = #self.refs2,2,-1 do
     currentGrad =self.refs2[i]:backward(self.inps2[i],currentGrad)
@@ -285,38 +285,34 @@ function SharpMask:backward(input,gradOutput)
 
   currentGrad =self.refs2[1]:backward(self.netv2Inp[5],currentGrad)
 
-  print('1 phase end')
+  --print('1 phase end')
   -- backward pass for trunk 2 and horizontal 2
   for i=12, 10,-1 do
     currentGrad = self.trunk2[i]:backward(self.trunk2[i-1].output, currentGrad)
   end
 
-  print('2 phase end')
-  print(self.netv2Inp[4]:size(), currentGrad:size())
+  --print('2 phase end')
   currentGrad = self.trunk2[9]:backward(self.netv2Inp[4], currentGrad)
-  print('3 phase end')
-  print(currentGrad:size())
-  print(self.neth2s[1].output:size())
-  print('inps :')
+  --print('3 phase end')
   self.neth2s[1]:backward(self.refs[0].output, currentGrad)
   currentGrad = self.trunk2[8]:backward(self.trunk2[7].output, currentGrad)
   currentGrad = self.trunk2[7]:backward(self.netv2Inp[3], currentGrad)
-  print('4 phase end')
+  --print('4 phase end')
 
   self.neth2s[2]:backward(self.refs[1].output, currentGrad)
   currentGrad = self.trunk2[6]:backward(self.netv2Inp[2], currentGrad)
-  print('5 phase end')
+  --print('5 phase end')
   
   self.neth2s[3]:backward(self.refs[2].output, currentGrad)
   currentGrad = self.trunk2[5]:backward(self.trunk2[4].output, currentGrad)
   currentGrad = self.trunk2[4]:backward(self.netv2Inp[1], currentGrad)
-  print('6 phase end')
+  --print('6 phase end')
 
   self.neth2s[4]:backward(self.refs[3].output, currentGrad)
   currentGrad = self.trunk2[3]:backward(self.trunk2[2].output, currentGrad)
   currentGrad = self.trunk2[2]:backward(self.trunk2[1].output, currentGrad)
   currentGrad = self.trunk2[1]:backward(input, currentGrad)
-  print('7 phase end')
+  --print('7 phase end')
 
   currentGrad = gradOutput
   for i = #self.refs,1,-1 do
@@ -325,7 +321,7 @@ function SharpMask:backward(input,gradOutput)
   end
   currentGrad =self.refs[0]:backward(self.trunk.output,currentGrad)
 
-  print('8 phase end')
+  --print('8 phase end')
   self.gradInput = currentGrad
   return currentGrad
 end
