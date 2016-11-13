@@ -218,6 +218,9 @@ function SharpMask:forward(input)
     currentOutput = self.refs[k]:forward(self.inps[k])
   end
 
+  self.output = currentOutput
+
+
   ---- trunk module forward second pass ---- 
   currentOutput = input
   for k = 1, 3 do
@@ -227,7 +230,6 @@ function SharpMask:forward(input)
   local netv2Inp ={}
 
   F = self.neth2s[4]:forward(self.refs[3].output)
-  
   torch.add(currentOutput, currentOutput, F)
   table.insert(netv2Inp, currentOutput)
   
@@ -257,14 +259,15 @@ function SharpMask:forward(input)
   self.netv2Inp = netv2Inp
 
   currentOutput = self.refs2[1]:forward(currentOutput)
-  self.inps2[1] = currentOutput
-  
+  self.inps2[1] = currentOutput 
 
   for k = 2,#self.refs2 do
-    self.inps2[k] = {netv2Inp[6-k],currentOutput}
+    local F = self.trunk2[self.skpos[k-1]].output
+    self.inps2[k] = {F,currentOutput}
     currentOutput = self.refs2[k]:forward(self.inps2[k])
-  end
+  end 
 
+  print(currentOutput:max())
   self.output = currentOutput
   --print('success')
   return self.output
@@ -272,55 +275,81 @@ end
 
 --------------------------------------------------------------------------------
 -- function: backward
-function SharpMask:backward(input,gradOutput)
+function SharpMask:backward(input,gradOutput, labels, criterion)
 
   -- backward pass for refinement 2
 
   --print('1 phase start')
   local currentGrad = gradOutput
-  for i = #self.refs2,2,-1 do
-    currentGrad =self.refs2[i]:backward(self.inps2[i],currentGrad)
-    currentGrad = currentGrad[2]
-  end
 
+  --print(currentGrad:max())
+  for i = #self.refs2,2,-1 do
+    currentGrad = self.refs2[i]:backward(self.inps2[i],currentGrad)
+    currentGrad = currentGrad[2]
+    --print(currentGrad:max())
+  end
+  --print(currentGrad:max())
   currentGrad =self.refs2[1]:backward(self.netv2Inp[5],currentGrad)
 
+
+  --print(currentGrad:max())
   --print('1 phase end')
   -- backward pass for trunk 2 and horizontal 2
   for i=12, 10,-1 do
     currentGrad = self.trunk2[i]:backward(self.trunk2[i-1].output, currentGrad)
   end
 
+  --print(currentGrad:max())
   --print('2 phase end')
   currentGrad = self.trunk2[9]:backward(self.netv2Inp[4], currentGrad)
   --print('3 phase end')
+
+  --print(currentGrad:max())
   self.neth2s[1]:backward(self.refs[0].output, currentGrad)
   currentGrad = self.trunk2[8]:backward(self.trunk2[7].output, currentGrad)
   currentGrad = self.trunk2[7]:backward(self.netv2Inp[3], currentGrad)
   --print('4 phase end')
+  --print(currentGrad:max())
 
   self.neth2s[2]:backward(self.refs[1].output, currentGrad)
   currentGrad = self.trunk2[6]:backward(self.netv2Inp[2], currentGrad)
   --print('5 phase end')
-  
+  --print(currentGrad:max())
+
   self.neth2s[3]:backward(self.refs[2].output, currentGrad)
   currentGrad = self.trunk2[5]:backward(self.trunk2[4].output, currentGrad)
   currentGrad = self.trunk2[4]:backward(self.netv2Inp[1], currentGrad)
   --print('6 phase end')
+  --print(currentGrad:max())
+
 
   self.neth2s[4]:backward(self.refs[3].output, currentGrad)
   currentGrad = self.trunk2[3]:backward(self.trunk2[2].output, currentGrad)
   currentGrad = self.trunk2[2]:backward(self.trunk2[1].output, currentGrad)
-  currentGrad = self.trunk2[1]:backward(input, currentGrad)
+  --print(currentGrad:max())
+  currentGrad = self.trunk2[1]:backward(input, currentGrad) 
   --print('7 phase end')
+  --print(currentGrad:max())
+
+ ---first pass backward pass
+  output = self.refs[4].output
+  self.labels = labels
+  self.criterion = criterion
+  currentGrad = criterion:backward(output, self.labels)
+  
 
   currentGrad = gradOutput
   for i = #self.refs,1,-1 do
+    --currentGrad:clamp(-1e-5, 1e-5)
     currentGrad =self.refs[i]:backward(self.inps[i],currentGrad)
     currentGrad = currentGrad[2]
+    --print(currentGrad:max())
   end
+  
+  --currentGrad:clamp(-1e-5, 1e-5)
   currentGrad =self.refs[0]:backward(self.trunk.output,currentGrad)
 
+  --print(currentGrad:max())
   --print('8 phase end')
   self.gradInput = currentGrad
   return currentGrad
@@ -330,12 +359,18 @@ end
 -- function: zeroGradParameters
 function SharpMask:zeroGradParameters()
   for k,v in pairs(self.refs) do self.refs[k]:zeroGradParameters() end
+  for k,n in pairs(self.neth2s) do self.neth2s[k]:zeroGradParameters(lr) end
+  for k,n in pairs(self.refs2) do self.refs2[k]:zeroGradParameters(lr) end
+  for k,n in pairs(self.trunk2) do self.trunk2[k]:zeroGradParameters(lr) end
 end
 
 --------------------------------------------------------------------------------
 -- function: updateParameters
 function SharpMask:updateParameters(lr)
   for k,n in pairs(self.refs) do self.refs[k]:updateParameters(lr) end
+  for k,n in pairs(self.neth2s) do self.neth2s[k]:updateParameters(lr) end
+  for k,n in pairs(self.refs2) do self.refs2[k]:updateParameters(lr) end
+  for k,n in pairs(self.trunk2) do self.trunk2[k]:updateParameters(lr) end
 end
 
 --------------------------------------------------------------------------------
@@ -426,4 +461,3 @@ function SharpMask:clone(...)
 end
 
 return nn.SharpMask
-
