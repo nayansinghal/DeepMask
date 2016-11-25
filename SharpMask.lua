@@ -35,11 +35,15 @@ function SharpMask:__init(config)
   -- create bottom-up flow (from deepmask)
   local m = torch.load(config.dm..'/model.t7')
 
-  local deepmask = m.model
-  self.trunk = deepmask.trunk
-  self.scoreBranch = deepmask.scoreBranch
-  self.maskBranchDM = deepmask.maskBranch
-  self.fSz = deepmask.fSz
+  print('reached sharpmask')
+  local sharpmask = m.model
+  self.trunk = sharpmask.trunk
+  self.scoreBranch = sharpmask.scoreBranch
+  self.maskBranchDM = sharpmask.maskBranchDM
+  self.fSz = sharpmask.fSz
+  self.refs = sharpmask.refs
+  self.neths = sharpmask.neths
+  self.netvs = sharpmask.netvs
 
   -- create refinement modules
   self:createTopDownRefinement(config)
@@ -124,6 +128,7 @@ end
 --------------------------------------------------------------------------------
 -- function: create horizontal 2 nets
 function SharpMask:createHorizontal2(config)
+  print '| Create Horizontal2'
   local neth2s = {}
 
   local crop;
@@ -170,7 +175,7 @@ end
 
 function SharpMask:createTopDownRefinement(config)
   -- create horizontal nets
-  self:createHorizontal(config)
+  --[==[ self:createHorizontal(config)
 
   -- create vertical nets
   self:createVertical(config)
@@ -186,9 +191,9 @@ function SharpMask:createTopDownRefinement(config)
   finalref:add(cudnn.SpatialConvolution((self.km)/2^(#refs),1,3,3,1,1))
   finalref:add(nn.View(config.batch,config.gSz*config.gSz))
 
-  self.refs = refs
+  self.refs = refs --]==]
 
-  self:createHorizontal2(config)
+  self:createHorizontal2(config) 
 
   self.trunk2 ={}
   for i =1, #self.trunk.modules do
@@ -267,7 +272,7 @@ function SharpMask:forward(input)
     currentOutput = self.refs2[k]:forward(self.inps2[k])
   end 
 
-  print(currentOutput:max())
+  --print(currentOutput:max())
   self.output = currentOutput
   --print('success')
   return self.output
@@ -359,14 +364,15 @@ end
 -- function: zeroGradParameters
 function SharpMask:zeroGradParameters()
   for k,v in pairs(self.refs) do self.refs[k]:zeroGradParameters() end
-  for k,n in pairs(self.neth2s) do self.neth2s[k]:zeroGradParameters(lr) end
-  for k,n in pairs(self.refs2) do self.refs2[k]:zeroGradParameters(lr) end
-  for k,n in pairs(self.trunk2) do self.trunk2[k]:zeroGradParameters(lr) end
+  for k,n in pairs(self.neth2s) do self.neth2s[k]:zeroGradParameters() end
+  for k,n in pairs(self.refs2) do self.refs2[k]:zeroGradParameters() end
+  for k,n in pairs(self.trunk2) do self.trunk2[k]:zeroGradParameters() end
 end
 
 --------------------------------------------------------------------------------
 -- function: updateParameters
 function SharpMask:updateParameters(lr)
+  lr = 0.00001
   for k,n in pairs(self.refs) do self.refs[k]:updateParameters(lr) end
   for k,n in pairs(self.neth2s) do self.neth2s[k]:updateParameters(lr) end
   for k,n in pairs(self.refs2) do self.refs2[k]:updateParameters(lr) end
@@ -378,6 +384,9 @@ end
 function SharpMask:training()
   self.trunk:training();self.scoreBranch:training();self.maskBranchDM:training()
   for k,n in pairs(self.refs) do self.refs[k]:training() end
+  for k,n in pairs(self.trunk2) do self.trunk2[k]:training() end
+  for k,n in pairs(self.neth2s) do self.neth2s[k]:training() end
+  for k,n in pairs(self.refs2) do self.refs2[k]:training() end
 end
 
 --------------------------------------------------------------------------------
@@ -385,6 +394,9 @@ end
 function SharpMask:evaluate()
   self.trunk:evaluate();self.scoreBranch:evaluate();self.maskBranchDM:evaluate()
   for k,n in pairs(self.refs) do self.refs[k]:evaluate() end
+  for k,n in pairs(self.trunk2) do self.trunk2[k]:evaluate() end
+  for k,n in pairs(self.neth2s) do self.neth2s[k]:evaluate() end
+  for k,n in pairs(self.refs2) do self.refs2[k]:evaluate() end
 end
 
 --------------------------------------------------------------------------------
@@ -392,6 +404,9 @@ end
 function SharpMask:cuda()
   self.trunk:cuda();self.scoreBranch:cuda();self.maskBranchDM:cuda()
   for k,n in pairs(self.refs) do self.refs[k]:cuda() end
+  for k,n in pairs(self.trunk2) do self.trunk2[k]:cuda() end
+  for k,n in pairs(self.neth2s) do self.neth2s[k]:cuda() end
+  for k,n in pairs(self.refs2) do self.refs2[k]:cuda() end
 end
 
 --------------------------------------------------------------------------------
@@ -399,6 +414,9 @@ end
 function SharpMask:float()
   self.trunk:float();self.scoreBranch:float();self.maskBranchDM:float()
   for k,n in pairs(self.refs) do self.refs[k]:float() end
+  for k,n in pairs(self.trunk2) do self.trunk2[k]:float() end
+  for k,n in pairs(self.neth2s) do self.neth2s[k]:float() end
+  for k,n in pairs(self.refs2) do self.refs2[k]:float() end
 end
 
 --------------------------------------------------------------------------------
@@ -406,11 +424,14 @@ end
 function SharpMask:setnpinference(np)
   local vsz = self.refs[0].modules[2].size
   self.refs[0].modules[2]:resetSize(np,vsz[2],vsz[3],vsz[4])
+  self.refs2[1].modules[2]:resetSize(np,vsz[2],vsz[3],vsz[4])
 end
 
 --------------------------------------------------------------------------------
 -- function: inference (used for full scene inference)
 function SharpMask:inference(np)
+
+  print('inference')
   self:evaluate()
 
   -- remove last view
@@ -438,6 +459,35 @@ function SharpMask:inference(np)
   utils.linear2convHead(self.scoreBranch)
   self.maskBranchDM = self.maskBranchDM.modules[1]
 
+  -----module 2 ----
+  self.refs2[#self.refs2]:remove()
+
+  -- remove ZeroPaddings
+  self.trunk2[8]=nn.Identity():cuda()
+  for k = 2, #self.refs2 do
+    local m = self.refs2[k].modules[1].modules[1].modules[1]
+    if torch.typename(m):find('SpatialZeroPadding') then
+      self.refs2[k].modules[1].modules[1].modules[1]=nn.Identity():cuda()
+    end
+  end
+
+  -- remove horizontal links, as they are applied convolutionally
+  for k = 2, #self.refs2 do
+    self.refs2[k].modules[1].modules[1]=nn.Identity():cuda()
+  end
+
+  for k = 1, #self.neth2s do
+    self.neth2s[k]=nn.Identity():cuda()
+  end
+
+  -- transform trunk and score branch to conv
+  self.trunk2[11] = nn.Identity()
+  local nInp,nOut = self.trunk2[12].weight:size(2)/(self.fSz*self.fSz),self.trunk2[12].weight:size(1)
+  local w = torch.reshape(self.trunk2[12].weight,nOut,nInp,self.fSz,self.fSz)
+  local y = cudnn.SpatialConvolution(nInp,nOut,self.fSz,self.fSz,1,1)
+  y.weight:copy(w); y.gradWeight:copy(w); y.bias:copy(self.trunk2[12].bias)
+  self.trunk2[12] = y
+
   self:cuda()
 end
 
@@ -449,12 +499,16 @@ function SharpMask:clone(...)
   local clone = f:readObject(); f:close()
 
   if select('#',...) > 0 then
+    print 'clone reached'
     clone.trunk:share(self.trunk,...)
     clone.maskBranchDM:share(self.maskBranchDM,...)
     clone.scoreBranch:share(self.scoreBranch,...)
     for k,n in pairs(self.netvs) do clone.netvs[k]:share(self.netvs[k],...)end
     for k,n in pairs(self.neths) do clone.neths[k]:share(self.neths[k],...) end
     for k,n in pairs(self.refs)  do clone.refs[k]:share(self.refs[k],...) end
+    for k,n in pairs(self.trunk2) do clone.trunk2[k]:share(self.trunk2[k],...)end
+    for k,n in pairs(self.neth2s) do clone.neth2s[k]:share(self.neth2s[k],...)end
+    for k,n in pairs(self.refs2) do clone.refs2[k]:share(self.refs2[k],...)end
   end
 
   return clone
